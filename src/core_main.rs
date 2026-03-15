@@ -411,90 +411,50 @@ pub fn core_main() -> Option<Vec<String>> {
                 import_config(&filepath);
             }
             return None;
-        } else if args[0] == "--password" {
-            if config::is_disable_settings() {
-                println!("Settings are disabled!");
-                return None;
-            }
-            if config::Config::is_disable_change_permanent_password() {
-                println!("Changing permanent password is disabled!");
-                return None;
-            }
-            if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    if let Err(err) = crate::ipc::set_permanent_password(args[1].to_owned()) {
-                        println!("{err}");
-                    } else {
-                        println!("Done!");
-                    }
+        } else if args[0] == "--get-password" {
+        use hbb_common::config::Config;
+        let pwd = Config::get_option("preset-password");
+        println!("{}", pwd);
+        return None;
+
+        } else if args[0] == "--get-option" {
+            if args.len() > 1 {
+                use hbb_common::config::Config;
+                let val = Config::get_option(args[1].as_str());
+                println!("{}", val);
                 } else {
-                    println!("Installation and administrative privileges required!");
-                }
+                eprintln!("Usage: --get-option <key>");
             }
             return None;
-        } else if args[0] == "--set-unlock-pin" {
-            if config::Config::is_disable_unlock_pin() {
-                println!("Unlock PIN is disabled!");
-                return None;
-            }
-            #[cfg(feature = "flutter")]
-            if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    if let Err(err) = crate::ipc::set_unlock_pin(args[1].to_owned(), false) {
-                        println!("{err}");
-                    } else {
-                        println!("Done!");
-                    }
-                } else {
-                    println!("Installation and administrative privileges required!");
-                }
-            }
-            return None;
-        } else if args[0] == "--get-id" {
-            println!("{}", crate::ipc::get_id());
-            return None;
-        } else if arg == "--get-password" {
+
+        } else if args[0] == "--set-option" {
+            if args.len() > 2 {
             use hbb_common::config::Config;
-            let pwd = Config::get_option("preset-password");
-            println!("{}", pwd);
-            return None;
-        } else if arg == "--get-option" {
-    if args.len() > 1 {
-        use hbb_common::config::Config;
-        let val = Config::get_option(args[1].as_str());
-        println!("{}", val);
-    } else {
-        eprintln!("Usage: --get-option <key>");
-    }
-    return None;
+            Config::set_option(args[1].clone(), args[2].clone());
+            println!("OK: {} = {}", args[1], args[2]);
+            } else {
+            eprintln!("Usage: --set-option <key> <value>");
+        }
+        return None;
 
-        } else if arg == "--set-option" {
-    if args.len() > 2 {
-        use hbb_common::config::Config;
-        Config::set_option(args[1].clone(), args[2].clone());
-        println!("OK: {} = {}", args[1], args[2]);
-    } else {
-        eprintln!("Usage: --set-option <key> <value>");
-    }
-    return None;
+        } else if args[0] == "--status" {
+            let id = crate::ipc::get_id();
+            if id.is_empty() {
+            println!("{{\"status\": \"offline\"}}");
+            } else {
+            println!("{{\"status\": \"ready\", \"id\": \"{}\"}}", id);
+        }
+        return None;
 
-    } else if arg == "--status" {
-    use crate::ipc;
-    match ipc::get_id() {
-        Ok(id) => println!("{{\"status\": \"ready\", \"id\": \"{}\"}}", id),
-        Err(_) => println!("{{\"status\": \"offline\"}}"),
-    }
-    return None;
-
-    } else if arg == "--print-config" {
-    use hbb_common::config::Config;
-    let path = Config::file();
-    println!("Config path: {}", path.display());
-    match std::fs::read_to_string(&path) {
-        Ok(content) => println!("{}", content),
-        Err(e) => eprintln!("Erreur: {}", e),
-    }
-    return None;
+        } else if args[0] == "--print-config" {
+            use hbb_common::config::Config;
+            let path = Config::file();
+            println!("Config path: {}", path.display());
+            match std::fs::read_to_string(&path) {
+            Ok(content) => println!("{}", content),
+            Err(e) => eprintln!("Erreur: {}", e),
+        }
+        return None;
         } else if args[0] == "--set-id" {
             if config::is_disable_settings() {
                 println!("Settings are disabled!");
