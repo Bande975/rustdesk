@@ -127,20 +127,20 @@ jobs:
  
       - name: Setup vcpkg
         run: |
-          git clone https://github.com/microsoft/vcpkg $env:USERPROFILE\vcpkg
-          & "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
-          echo "VCPKG_ROOT=$env:USERPROFILE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
- 
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "C:\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Append
+
       - name: Install vcpkg dependencies
         run: |
-          & "$env:USERPROFILE\vcpkg\vcpkg" install `
+          C:\vcpkg\vcpkg install `
             --classic `
             libvpx:x64-windows-static `
             libyuv:x64-windows-static `
             opus:x64-windows-static `
             aom:x64-windows-static
-        env:
-          VCPKG_ROOT: ${{ env.USERPROFILE }}\vcpkg
+          echo "VCPKG_INSTALLED_DIR=C:\vcpkg\installed" | Out-File -FilePath $env:GITHUB_ENV -Append
  
       - name: Download patched Flutter engine
         run: |
@@ -164,7 +164,7 @@ jobs:
       - name: Build with build.py
         run: python build.py --portable --flutter
         env:
-          VCPKG_ROOT: ${{ env.USERPROFILE }}\vcpkg
+          VCPKG_ROOT: C:\vcpkg
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
  
       - name: Package artifact
