@@ -1,0 +1,162 @@
+name: Build RustDesk Windows Headless
+
+# Déclenché manuellement depuis l'onglet Actions de ton fork GitHub
+# → bouton "Run workflow"
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'src/**'
+      - 'flutter/**'
+      - 'Cargo.*'
+      - 'libs/**'
+
+env:
+  FLUTTER_VERSION: "3.24.5"
+  RUST_VERSION: "1.75"
+  # Ton serveur custom (laisser vide pour utiliser les serveurs publics RustDesk)
+  CUSTOM_RENDEZVOUS_SERVER: ""
+  CUSTOM_RS_PUB_KEY: ""
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-2022   # Runner GitHub avec VS 2022 + LLVM préinstallés
+    defaults:
+      run:
+        shell: pwsh          # PowerShell tout au long
+
+    steps:
+      # ── 1. Récupérer le code source ────────────────────────────────────
+      - name: Checkout repository + submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ── 2. Installer Rust avec la toolchain requise ────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      # Cache Cargo pour accélérer les builds suivants
+      - name: Cache Cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # ── 3. Installer Flutter ───────────────────────────────────────────
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2.12.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Enable Flutter Windows desktop
+        run: |
+          flutter config --enable-windows-desktop
+          flutter --version
+
+      # ── 4. Installer LLVM/Clang (nécessaire pour bindgen) ─────────────
+      - name: Install LLVM/Clang
+        run: choco install -y llvm --version=15.0.7 --force
+        env:
+          CHOCOINSTALL_TIMEOUT: 300
+
+      - name: Set LIBCLANG_PATH
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
+          echo "PATH=$llvm;$env:PATH" >> $env:GITHUB_ENV
+
+      # ── 5. Installer vcpkg + dépendances C++ ──────────────────────────
+      # vcpkg est déjà présent sur windows-2022 à C:\vcpkg
+      - name: Setup vcpkg
+        run: |
+          cd C:\vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat -disableMetrics
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-windows-x64-${{ hashFiles('**/vcpkg.json') }}-v2
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Install vcpkg dependencies
+        run: |
+          C:\vcpkg\vcpkg install `
+            libvpx:x64-windows-static `
+            libyuv:x64-windows-static `
+            opus:x64-windows-static `
+            aom:x64-windows-static
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      # ── 6. Injecter la config serveur custom ──────────────────────────
+      # Si tu as défini CUSTOM_RENDEZVOUS_SERVER, on le bake dans le binaire.
+      # Sinon, on utilise les valeurs par défaut (serveurs publics RustDesk).
+      - name: Inject custom server config
+        if: env.CUSTOM_RENDEZVOUS_SERVER != ''
+        run: |
+          # Écrire la config dans RustDesk2.toml avant compilation
+          # (les valeurs compilées en dur dans Cargo.toml via env vars)
+          echo "RENDEZVOUS_SERVER=${{ env.CUSTOM_RENDEZVOUS_SERVER }}" >> $env:GITHUB_ENV
+          echo "RS_PUB_KEY=${{ env.CUSTOM_RS_PUB_KEY }}" >> $env:GITHUB_ENV
+
+      # ── 7. Flutter pub get ─────────────────────────────────────────────
+      - name: Flutter pub get
+        working-directory: flutter
+        run: flutter pub get
+
+      # ── 8. Générer le bridge Flutter/Rust ─────────────────────────────
+      - name: Generate Flutter-Rust bridge
+        run: |
+          cargo install flutter_rust_bridge_codegen --version "1.80.1" --locked 2>$null
+          Push-Location flutter
+          flutter pub run build_runner build --delete-conflicting-outputs 2>$null
+          Pop-Location
+        continue-on-error: true   # le bridge est déjà pré-généré dans le repo
+
+      # ── 9. Compilation Rust principale ────────────────────────────────
+      - name: Build Rust backend (release)
+        run: |
+          cargo build --release --features flutter
+        env:
+          VCPKG_ROOT: C:\vcpkg
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+
+      # ── 10. Build Flutter Windows ──────────────────────────────────────
+      - name: Build Flutter Windows app
+        working-directory: flutter
+        run: |
+          flutter build windows --release
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      # ── 11. Copier le binaire Rust dans le bundle Flutter ─────────────
+      - name: Assemble final package
+        run: |
+          $build = "flutter\build\windows\x64\runner\Release"
+          # Copier rustdesk.exe (backend Rust) dans le dossier Flutter build
+          Copy-Item "target\release\rustdesk.exe" "$build\rustdesk.exe" -Force
+          # Créer un zip prêt à distribuer
+          Compress-Archive -Path "$build\*" -DestinationPath "rustdesk-headless-windows-x64.zip"
+
+      # ── 12. Uploader l'artifact téléchargeable ─────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-headless-windows-x64
+          path: rustdesk-headless-windows-x64.zip
+          retention-days: 30    # disponible 30 jours depuis l'onglet Actions
