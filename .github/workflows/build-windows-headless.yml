@@ -93,6 +93,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-pc-windows-msvc
+          components: rustfmt
  
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -161,7 +162,7 @@ jobs:
         run: pip install pywin32
  
       - name: Build with build.py
-        run: python build.py --portable --hwcodec --flutter
+        run: python build.py --portable --flutter
         env:
           VCPKG_ROOT: ${{ env.USERPROFILE }}\vcpkg
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
