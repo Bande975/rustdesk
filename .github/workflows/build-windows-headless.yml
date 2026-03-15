@@ -118,8 +118,11 @@ jobs:
  
       - name: Install LLVM
         run: |
-          choco install -y llvm --version=${{ env.LLVM_VERSION }} --force
+          $llvm_url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-15.0.7/LLVM-15.0.7-win64.exe"
+          Invoke-WebRequest -Uri $llvm_url -OutFile "LLVM.exe"
+          Start-Process "LLVM.exe" -ArgumentList "/S" -Wait
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "PATH=C:\Program Files\LLVM\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
  
       - name: Setup vcpkg
         run: |
