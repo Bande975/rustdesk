@@ -133,6 +133,7 @@ jobs:
       - name: Install vcpkg dependencies
         run: |
           & "$env:USERPROFILE\vcpkg\vcpkg" install `
+            --classic `
             libvpx:x64-windows-static `
             libyuv:x64-windows-static `
             opus:x64-windows-static `
