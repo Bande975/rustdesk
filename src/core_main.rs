@@ -682,11 +682,20 @@ pub fn core_main() -> Option<Vec<String>> {
         }
     }
     //_async_logger_holder.map(|x| x.flush());
+    //_async_logger_holder.map(|x| x.flush());
     #[cfg(feature = "flutter")]
-    return Some(flutter_args);
+    {
+        if args.is_empty() || crate::common::is_empty_uni_link(&args.get(0).unwrap_or(&String::new())) {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+        return Some(flutter_args);
+    }
     #[cfg(not(feature = "flutter"))]
     return Some(args);
 }
+
 
 #[inline]
 #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
