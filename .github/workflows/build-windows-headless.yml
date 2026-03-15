@@ -1,48 +1,100 @@
 name: Build RustDesk Windows Headless
-
-# Déclenché manuellement depuis l'onglet Actions de ton fork GitHub
-# → bouton "Run workflow"
+ 
 on:
   workflow_dispatch:
   push:
     branches: [ master, main ]
-    paths:
-      - 'src/**'
-      - 'flutter/**'
-      - 'Cargo.*'
-      - 'libs/**'
-
+ 
 env:
-  FLUTTER_VERSION: "3.24.5"
   RUST_VERSION: "1.75"
-  # Ton serveur custom (laisser vide pour utiliser les serveurs publics RustDesk)
-  CUSTOM_RENDEZVOUS_SERVER: ""
-  CUSTOM_RS_PUB_KEY: ""
-
+  FLUTTER_VERSION: "3.24.5"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+ 
+# ─────────────────────────────────────────────────────────────
+# JOB 1 : Générer le bridge Flutter/Rust (Ubuntu, plus rapide)
+# ─────────────────────────────────────────────────────────────
 jobs:
-  build-windows-x64:
-    runs-on: windows-2022   # Runner GitHub avec VS 2022 + LLVM préinstallés
-    defaults:
-      run:
-        shell: pwsh          # PowerShell tout au long
-
+  generate-bridge:
+    runs-on: ubuntu-22.04
     steps:
-      # ── 1. Récupérer le code source ────────────────────────────────────
-      - name: Checkout repository + submodules
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
-
-      # ── 2. Installer Rust avec la toolchain requise ────────────────────
-      - name: Install Rust toolchain
+ 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+ 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2.12.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+ 
+      - name: Install bridge dependencies
+        run: |
+          cargo install flutter_rust_bridge_codegen --version "1.80.1" --locked
+          sudo apt-get install -y libgtk-3-dev
+ 
+      - name: Generate bridge files
+        run: |
+          cd flutter && flutter pub get && cd ..
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input src/flutter_ffi.rs \
+            --dart-output flutter/lib/bridge_generated.dart \
+            --dart-decl-output flutter/lib/bridge_definitions.dart \
+            --c-output flutter/macos/Runner/bridge_generated.h
+        continue-on-error: true
+ 
+      - name: Upload bridge artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-files
+          path: |
+            flutter/lib/bridge_generated.dart
+            flutter/lib/bridge_definitions.dart
+            src/bridge_generated.rs
+ 
+# ─────────────────────────────────────────────────────────────
+# JOB 2 : Build Windows x64
+# ─────────────────────────────────────────────────────────────
+  build-windows-x64:
+    needs: generate-bridge
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+ 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+ 
+      - name: Download bridge files
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-files
+          path: .
+        continue-on-error: true
+ 
+      - name: Export vcpkg cache env
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+ 
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-pc-windows-msvc
-
-      # Cache Cargo pour accélérer les builds suivants
-      - name: Cache Cargo registry + git
+ 
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
@@ -51,112 +103,86 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-
-      # ── 3. Installer Flutter ───────────────────────────────────────────
+ 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2.12.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
-
-      - name: Enable Flutter Windows desktop
+ 
+      - name: Enable Flutter Windows
         run: |
           flutter config --enable-windows-desktop
           flutter --version
-
-      # ── 4. Installer LLVM/Clang (nécessaire pour bindgen) ─────────────
-      - name: Install LLVM/Clang
-        run: choco install -y llvm --version=15.0.7 --force
-        env:
-          CHOCOINSTALL_TIMEOUT: 300
-
-      - name: Set LIBCLANG_PATH
+ 
+      - name: Install LLVM
         run: |
-          $llvm = "C:\Program Files\LLVM\bin"
-          echo "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-          echo "PATH=$llvm;$env:PATH" >> $env:GITHUB_ENV
-
-      # ── 5. Installer vcpkg + dépendances C++ ──────────────────────────
-      # vcpkg est déjà présent sur windows-2022 à C:\vcpkg
+          choco install -y llvm --version=${{ env.LLVM_VERSION }} --force
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+ 
       - name: Setup vcpkg
         run: |
-          cd C:\vcpkg
-          git pull
-          .\bootstrap-vcpkg.bat -disableMetrics
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-
-      - name: Cache vcpkg packages
-        uses: actions/cache@v4
-        with:
-          path: C:\vcpkg\installed
-          key: vcpkg-windows-x64-${{ hashFiles('**/vcpkg.json') }}-v2
-          restore-keys: vcpkg-windows-x64-
-
+          git clone https://github.com/microsoft/vcpkg $env:USERPROFILE\vcpkg
+          & "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          echo "VCPKG_ROOT=$env:USERPROFILE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+ 
       - name: Install vcpkg dependencies
         run: |
-          C:\vcpkg\vcpkg install `
+          & "$env:USERPROFILE\vcpkg\vcpkg" install `
             libvpx:x64-windows-static `
             libyuv:x64-windows-static `
             opus:x64-windows-static `
             aom:x64-windows-static
         env:
-          VCPKG_ROOT: C:\vcpkg
-
-      # ── 6. Injecter la config serveur custom ──────────────────────────
-      # Si tu as défini CUSTOM_RENDEZVOUS_SERVER, on le bake dans le binaire.
-      # Sinon, on utilise les valeurs par défaut (serveurs publics RustDesk).
-      - name: Inject custom server config
-        if: env.CUSTOM_RENDEZVOUS_SERVER != ''
+          VCPKG_ROOT: ${{ env.USERPROFILE }}\vcpkg
+ 
+      - name: Download patched Flutter engine
         run: |
-          # Écrire la config dans RustDesk2.toml avant compilation
-          # (les valeurs compilées en dur dans Cargo.toml via env vars)
-          echo "RENDEZVOUS_SERVER=${{ env.CUSTOM_RENDEZVOUS_SERVER }}" >> $env:GITHUB_ENV
-          echo "RS_PUB_KEY=${{ env.CUSTOM_RS_PUB_KEY }}" >> $env:GITHUB_ENV
-
-      # ── 7. Flutter pub get ─────────────────────────────────────────────
+          Invoke-WebRequest `
+            -Uri "https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip" `
+            -OutFile "windows-x64-release.zip"
+          Expand-Archive -Path "windows-x64-release.zip" -DestinationPath "windows-x64-release"
+          $flutter_root = (Get-Command flutter).Source | Split-Path | Split-Path
+          $cache = "$flutter_root\bin\cache\artifacts\engine\windows-x64-release"
+          New-Item -ItemType Directory -Path $cache -Force | Out-Null
+          Copy-Item "windows-x64-release\*" $cache -Force
+        continue-on-error: true
+ 
       - name: Flutter pub get
         working-directory: flutter
         run: flutter pub get
-
-      # ── 8. Générer le bridge Flutter/Rust ─────────────────────────────
-      - name: Generate Flutter-Rust bridge
-        run: |
-          cargo install flutter_rust_bridge_codegen --version "1.80.1" --locked 2>$null
-          Push-Location flutter
-          flutter pub run build_runner build --delete-conflicting-outputs 2>$null
-          Pop-Location
-        continue-on-error: true   # le bridge est déjà pré-généré dans le repo
-
-      # ── 9. Compilation Rust principale ────────────────────────────────
-      - name: Build Rust backend (release)
-        run: |
-          cargo build --release --features flutter
+ 
+      - name: Install Python deps
+        run: pip install pywin32
+ 
+      - name: Build with build.py
+        run: python build.py --portable --hwcodec --flutter
         env:
-          VCPKG_ROOT: C:\vcpkg
+          VCPKG_ROOT: ${{ env.USERPROFILE }}\vcpkg
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-
-      # ── 10. Build Flutter Windows ──────────────────────────────────────
-      - name: Build Flutter Windows app
-        working-directory: flutter
+ 
+      - name: Package artifact
         run: |
-          flutter build windows --release
-        env:
-          VCPKG_ROOT: C:\vcpkg
-
-      # ── 11. Copier le binaire Rust dans le bundle Flutter ─────────────
-      - name: Assemble final package
-        run: |
-          $build = "flutter\build\windows\x64\runner\Release"
-          # Copier rustdesk.exe (backend Rust) dans le dossier Flutter build
-          Copy-Item "target\release\rustdesk.exe" "$build\rustdesk.exe" -Force
-          # Créer un zip prêt à distribuer
-          Compress-Archive -Path "$build\*" -DestinationPath "rustdesk-headless-windows-x64.zip"
-
-      # ── 12. Uploader l'artifact téléchargeable ─────────────────────────
-      - name: Upload build artifact
+          $paths = @(
+            "flutter\build\windows\x64\runner\Release",
+            "flutter\build\windows\runner\Release",
+            "target\release"
+          )
+          $build = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($build) {
+            Compress-Archive -Path "$build\*" -DestinationPath "rustdesk-headless-windows-x64.zip"
+          } else {
+            Write-Host "Recherche .exe:"
+            Get-ChildItem -Recurse -Filter "*.exe" | Select-Object FullName
+          }
+        if: always()
+ 
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-headless-windows-x64
           path: rustdesk-headless-windows-x64.zip
-          retention-days: 30    # disponible 30 jours depuis l'onglet Actions
+          retention-days: 30
+        if: always()
+ 
