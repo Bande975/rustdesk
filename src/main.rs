@@ -23,6 +23,17 @@ fn main() {
     feature = "flutter"
 )))]
 fn main() {
+    {
+        use hbb_common::config::OVERWRITE_SETTINGS;
+        OVERWRITE_SETTINGS
+            .write()
+            .unwrap()
+            .insert("approve-mode".to_string(), "password".to_string());
+        OVERWRITE_SETTINGS
+            .write()
+            .unwrap()
+            .insert("verification-method".to_string(), "use-permanent-password".to_string());
+    }
     #[cfg(all(windows, not(feature = "inline")))]
     unsafe {
         winapi::um::shellscalingapi::SetProcessDpiAwareness(2);

